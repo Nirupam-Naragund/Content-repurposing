@@ -1,0 +1,308 @@
+<!-- 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrewAI Content Generator</title>
+    <style>
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .input-container {
+            margin-bottom: 20px;
+        }
+        .loading {
+            display: none;
+            color: #666;
+        }
+        .result-container {
+            margin-top: 20px;
+        }
+        .mic-button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .mic-button.recording {
+            background-color: #dc3545;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        #textInput {
+            flex: 1;
+            padding: 8px;
+            margin-right: 10px;
+        }
+        .status-indicator {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CrewAI Content Generator</h1>
+        
+        <div class="input-container">
+            <div class="input-group">
+                <input type="text" id="textInput" placeholder="Enter your topic or content request">
+
+                <button id="generateButton">Generate Content</button>
+            </div>
+            <div class="status-indicator" id="recordingStatus"></div>
+        </div>
+
+        <div id="status">Status: Ready</div>
+        <div id="loading" class="loading">Processing your request...</div>
+        <div id="result" class="result-container"></div>
+    </div>
+
+    <script src="https://kit.fontawesome.com/your-font-awesome-kit.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const textInput = document.getElementById('textInput');
+            const micButton = document.getElementById('micButton');
+            const generateButton = document.getElementById('generateButton');
+            const recordingStatus = document.getElementById('recordingStatus');
+            const statusDiv = document.getElementById('status');
+            const loadingDiv = document.getElementById('loading');
+            const resultDiv = document.getElementById('result');
+
+            let mediaRecorder;
+            let audioChunks = [];
+            let isRecording = false;
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                micButton.style.display = 'none';
+                recordingStatus.textContent = 'Audio input is not supported in this browser.';
+            }
+
+            let audioStream;
+
+            // Start recording
+            async function startRecording() {
+                try {
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(audioStream);
+                    mediaRecorder.start();
+                    mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
+                    mediaRecorder.onstop = () => sendAudioToServer();
+                    
+                    isRecording = true;
+                    micButton.classList.add('recording');
+                    micButton.innerHTML = '<i class="fas fa-stop"></i> Stop Recording';
+                    recordingStatus.textContent = 'Recording... Speak now';
+                } catch (error) {
+                    recordingStatus.textContent = 'Failed to access microphone';
+                    console.error('Error accessing microphone:', error);
+                }
+            }
+
+            // Stop recording
+            function stopRecording() {
+                mediaRecorder.stop();
+                audioStream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                micButton.classList.remove('recording');
+                micButton.innerHTML = '<i class="fas fa-microphone"></i> Start Recording';
+                recordingStatus.textContent = '';
+            }
+
+            // Send recorded audio to the server
+            async function sendAudioToServer() {
+                const blob = new Blob(audioChunks, { type: 'audio/wav' });
+                const formData = new FormData();
+                formData.append('audio', blob, 'audio.wav');
+                
+                try {
+                    const response = await fetch('/speech_to_text', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        textInput.value = data.text;
+                    } else {
+                        recordingStatus.textContent = 'Error: ' + data.error;
+                    }
+                } catch (error) {
+                    recordingStatus.textContent = 'Error sending audio to server';
+                    console.error('Error sending audio:', error);
+                }
+            }
+
+            // Handle mic button clicks
+            micButton.addEventListener('click', () => {
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            });
+
+            // Handle generate content
+            generateButton.addEventListener('click', async () => {
+                if (!textInput.value.trim()) {
+                    alert('Please enter a topic or record your request.');
+                    return;
+                }
+
+                statusDiv.style.display = 'none';
+                loadingDiv.style.display = 'block';
+                resultDiv.innerHTML = '';
+
+                try {
+                    const response = await fetch('/process_input', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: textInput.value })
+                    });
+
+                    const data = await response.json();
+                    loadingDiv.style.display = 'none';
+                    statusDiv.style.display = 'block';
+
+                    if (data.success) {
+                        displayResults(data.results);
+                    } else {
+                        resultDiv.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                    }
+                } catch (error) {
+                    loadingDiv.style.display = 'none';
+                    statusDiv.style.display = 'block';
+                    resultDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+                }
+            });
+
+            function displayResults(results) {
+                let html = '<h2>Generated Content</h2>';
+                
+                for (const [key, value] of Object.entries(results)) {
+                    html += `<h3>${key.replace(/_/g, ' ').toUpperCase()}</h3>`;
+                    if (typeof value === 'object') {
+                        if (value.description) {
+                            html += `<p><em>${value.description}</em></p>`;
+                            html += `<pre>${value.output}</pre>`;
+                        } else {
+                            for (const [subKey, subValue] of Object.entries(value)) {
+                                html += `<h4>${subKey.replace(/_/g, ' ').toUpperCase()}</h4>`;
+                                html += `<p><em>${subValue.description}</em></p>`;
+                                html += `<pre>${subValue.output}</pre>`;
+                            }
+                        }
+                    } else {
+                        html += `<pre>${value}</pre>`;
+                    }
+                }
+                
+                resultDiv.innerHTML = html;
+            }
+        });
+    </script>
+</body>
+</html>
+
+ -->
+
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrewAI Content Generator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; background-color: #1f2023; color: #fff; padding: 2rem; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { font-size: 2.5rem; margin-bottom: 1.5rem; }
+    .input-container { display: flex; align-items: center; margin-bottom: 1.5rem; }
+    #textInput { flex: 1; padding: 0.75rem; font-size: 1rem; border: none; border-radius: 0.25rem; background-color: #2f3136; color: #fff; margin-right: 1rem; }
+    #generateButton { background-color: #5865f2; color: #fff; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; border-radius: 0.25rem; cursor: pointer; }
+    #generateButton:hover { background-color: #4752c4; }
+    .result-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+    .card { background-color: #2f3136; border-radius: 0.25rem; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); }
+    .card-header { font-size: 1.25rem; font-weight: bold; margin-bottom: 1rem; }
+    .card-content { font-size: 0.95rem; white-space: pre-wrap; }
+    .error { color: #ff6b6b; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>CrewAI Content Generator</h1>
+    <div class="input-container">
+      <input type="text" id="textInput" placeholder="Enter your topic or content request">
+      <button id="generateButton">Generate Content</button>
+    </div>
+    <div class="result-container"></div>
+  </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('generateButton').addEventListener('click', async () => {
+        const textInput = document.getElementById('textInput');
+        const resultContainer = document.querySelector('.result-container');
+        if (!textInput.value.trim()) {
+          alert('Please enter a topic or content request.');
+          return;
+        }
+        try {
+          const response = await fetch('/process_input', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: textInput.value })
+          });
+          const data = await response.json();
+          if (data.success) {
+            resultContainer.innerHTML = '';
+            displayResults(data.results);
+          } else {
+            resultContainer.innerHTML = `<div class="card"><div class="card-content error">Error: ${data.error}</div></div>`;
+          }
+        } catch (error) {
+          resultContainer.innerHTML = `<div class="card"><div class="card-content error">Error: ${error.message}</div></div>`;
+        }
+      });
+  
+      function displayResults(results) {
+        const resultContainer = document.querySelector('.result-container');
+        for (const [key, value] of Object.entries(results)) {
+          const card = document.createElement('div');
+          card.classList.add('card');
+          const cardHeader = document.createElement('div');
+          cardHeader.classList.add('card-header');
+          cardHeader.textContent = key.replace(/_/g, ' ').toUpperCase();
+          card.appendChild(cardHeader);
+          const cardContent = document.createElement('div');
+          cardContent.classList.add('card-content');
+          if (typeof value === 'object') {
+            if (value.description) {
+              cardContent.textContent = `${value.description}\n\n${value.output}`;
+            } else {
+              for (const [subKey, subValue] of Object.entries(value)) {
+                cardContent.innerHTML += `<h4>${subKey.replace(/_/g, ' ').toUpperCase()}</h4>\n<p>${subValue.description}</p>\n<pre>${subValue.output}</pre>\n`;
+              }
+            }
+          } else {
+            cardContent.textContent = value;
+          }
+          card.appendChild(cardContent);
+          resultContainer.appendChild(card);
+        }
+      }
+    });
+  </script>
+  
+</body>
+</html>
